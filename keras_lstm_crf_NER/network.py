@@ -37,13 +37,6 @@ class Network(object):
         output = Embedding(input_dim=self.vocab_size,
                            output_dim=self.embed_dim,
                            input_length=self.max_sentence_len)(input)
-        """
-        output = LSTM(units=Network.lstm_out_space,
-                     return_sequences=True,
-                     dropout=Network.lstm_drop_rate,
-                     recurrent_dropout=Network.lstm_recurrent_drop_rate,
-                     kernel_initializer=k.initializers.he_normal())(output)
-        """
         output = Bidirectional(LSTM(units=Network.lstm_out_space,
                                     return_sequences=True,
                                     dropout=Network.lstm_drop_rate,
@@ -60,5 +53,4 @@ class Network(object):
         #model.summary()
 
         return model
-
 

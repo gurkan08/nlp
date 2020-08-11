@@ -1,22 +1,17 @@
 
-from torch.utils.data import DataLoader
-from torch.autograd import Variable
-import torch
-from statistics import mean
-import matplotlib.pyplot as plt
 import numpy as np
 import keras as k
+from keras.callbacks import *
 from keras.callbacks import ModelCheckpoint
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
+import matplotlib.pyplot as plt
 
-from keras_ner_lstm_crf.mydataloader import MyDataloader
-from keras_ner_lstm_crf.network import Network
+from network import Network
 
 class Main(object):
     train_data_dir = "MIT_Movie_Corpus/engtrain.bio"
     test_data_dir = "MIT_Movie_Corpus/engtest.bio"
-    loss_figure_dir = "loss.png"
 
     word2id = {}
     id2word = {}
@@ -29,7 +24,7 @@ class Main(object):
     empty_tag = "O".lower()  # bunu datasete göre güncelle !, tag leri padding yaparken bunu kullan :)
 
     # network params = network spesific params
-    epoch = 250
+    epoch = 1
     batch_size = 20
     validation_split_rate = 0.1
     shuffle_batch = True
@@ -37,7 +32,10 @@ class Main(object):
     lstm_hidden_dim = 50
     num_layers = 1
     lr = 0.00025
-    use_cuda = torch.cuda.is_available()
+    padding_type = 'post'
+    padding_value = 0.
+    early_stop_patience = 2
+
 
     def __init__(self):
         pass
@@ -153,80 +151,73 @@ class Main(object):
                     tag_id += 1
 
     @staticmethod
-    def get_dataloader(X, y):
-        """
-        :param X: list of string
-        :param y: list of string
-        :return: dataloader obj
-        """
-        dataloader = DataLoader(dataset=MyDataloader(X, y,
-                                                     Main.word2id,
-                                                     Main.tag2id,
-                                                     Main.max_sentence_len,
-                                                     Main.empty_tag),
-                                batch_size=Main.batch_size,
-                                shuffle=Main.shuffle_batch)
-        return dataloader
+    def convert2numeric(X, y):
+        X_all = []
+        y_all = []
+        for X, y in zip(X, y):
+            _X = []
+            _y = []
+            for word in X.split():
+                _X.append(int(Main.word2id[word]))
+            X_all.append(_X)
+
+            for tag in y.split():
+                _y.append(Main.tag2id[tag])
+            y_all.append(_y)
+        return X_all, y_all
 
     @staticmethod
-    def run_train(dataloader, model, optimizer):
-        model.train()  # set train mode
-        epoch_loss = []
-        for id, (X, y, len_X) in enumerate(dataloader):  # batch
-            # convert tensors to variables
-            X = Variable(X, requires_grad=False)
-            y = Variable(y, requires_grad=False)
-            if Main.use_cuda:
-                X = X.cuda()
-                y = y.cuda()
-                model = model.cuda()
-
-            # forward pass
-            batch_len = len_X.squeeze().tolist()  # list: word/sequences length of each batch elements
-            loss, crf_decode_result = model(X.float(), y.long(), batch_len)  # float type
-            # print("loss ---> ", loss.item())
-            epoch_loss.append(loss.item())
-
-            # backward and optimize
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-        return mean(epoch_loss), crf_decode_result
+    def padding(X, y):
+        X = pad_sequences(np.array(X),
+                          maxlen=Main.max_sentence_len,
+                          dtype='int32',
+                          padding=Main.padding_type,
+                          value=Main.padding_value)
+        y = pad_sequences(np.array(y),
+                          maxlen=Main.max_sentence_len,
+                          dtype='int32',
+                          padding=Main.padding_type,
+                          value=Main.padding_value)
+        y = [to_categorical(i, num_classes=len(Main.tag2id)) for i in y]  # BU SATIR OLMADAN ÇALIŞMIYOR !
+        return X, y
 
     @staticmethod
-    def run_test(dataloader, model):
-        model.eval()  # set eval mode
-        epoch_loss = []
-        for id, (X, y, len_X) in enumerate(dataloader):  # batch
-            # convert tensors to variables
-            X = Variable(X, requires_grad=False)
-            y = Variable(y, requires_grad=False)
-            if Main.use_cuda:
-                X = X.cuda()
-                y = y.cuda()
-                model = model.cuda()
+    def plot_info(history, name="loss"):
+        # to prevent overlap, clear the buffer
+        plt.clf()
 
-            # forward pass
-            batch_len = len_X.squeeze().tolist()  # list: word/sequences length of each batch elements
-            loss, crf_decode_result = model(X.float(), y.long(), batch_len)  # float type
-            # print("loss ---> ", loss.item())
-            epoch_loss.append(loss.item())
-        return mean(epoch_loss), crf_decode_result
+        if name=="loss":
+            plt.plot([i for i in range(1, Main.epoch + 1)], history["loss"])
+            plt.plot([i for i in range(1, Main.epoch + 1)], history["val_loss"])
+            plt.xlabel("epoch")
+            plt.ylabel(name)
+            plt.title(name + " graphic")
+            plt.legend(["loss", "val_loss"])
+            # plt.show()
+            plt.savefig(name + ".png")
 
-    @staticmethod
-    def plot_loss_figure(train_loss, test_loss):
-        plt.plot([i for i in range(1, Main.epoch + 1)], train_loss, label="train")
-        plt.plot([i for i in range(1, Main.epoch + 1)], test_loss, label="test")
-        plt.xlabel("epoch")
-        plt.ylabel("loss")
-        plt.title("loss graphic")
-        # plt.show()
-        plt.savefig(Main.loss_figure_dir)
+        elif name=="acc":
+            plt.plot([i for i in range(1, Main.epoch + 1)], history["acc"])
+            plt.plot([i for i in range(1, Main.epoch + 1)], history["crf_viterbi_accuracy"])
+            plt.plot([i for i in range(1, Main.epoch + 1)], history["val_acc"])
+            plt.plot([i for i in range(1, Main.epoch + 1)], history["val_crf_viterbi_accuracy"])
+            plt.xlabel("epoch")
+            plt.ylabel(name)
+            plt.title(name + " graphic")
+            plt.legend(["acc", "crf_viterbi_accuracy", "val_acc", "val_crf_viterbi_accuracy"])
+            # plt.show()
+            plt.savefig(name + ".png")
 
     @staticmethod
     def run_pipeline():
         X_train_sentences, X_train_tags, X_test_sentences, X_test_tags = Main.load_dataset()
         Main.create_dicts(X_train_sentences, X_train_tags, X_test_sentences, X_test_tags)
+        # convert to numeric format
+        X_train, y_train = Main.convert2numeric(X_train_sentences, X_train_tags)
+        X_test, y_test = Main.convert2numeric(X_test_sentences, X_test_tags)
+        # padding
+        X_train, y_train = Main.padding(X_train, y_train)
+        X_test, y_test = Main.padding(X_test, y_test)
 
         """
         print(Main.word2id)
@@ -239,73 +230,67 @@ class Main(object):
         print(Main.min_sentence_len) # 1
         """
 
-        train_dataloader = Main.get_dataloader(X_train_sentences, X_train_tags)
-        test_dataloader = Main.get_dataloader(X_test_sentences, X_test_tags)
-
-        # optimizer, model, loss
+        # create optimizer, model, loss
         optimizer = k.optimizers.Adam(lr=Main.lr, beta_1=0.9, beta_2=0.999)
         model = Network(max_sentence_len=Main.max_sentence_len,
                         vocab_size=len(Main.word2id),
                         embed_dim=Main.embedding_dim,
                         tag_size=len(Main.tag2id),
-                        optimizer=optimizer)
-
-        model = model.get_model() # önemli !
+                        optimizer=optimizer).get_model()
         print("-----------model summary-----------------> ")
         print(model.count_params())
         print(model.summary())
         print("-----------model summary-----------------> ")
 
+        """
         # Saving the best model only
         model_path = "ner-model-keras-{val_accuracy:.2f}.hdf5"
         checkpoint = ModelCheckpoint(model_path, monitor='val_accuracy', verbose=1, save_best_only=True, mode='max')
         callbacks_list = [checkpoint]
+        """
 
-
+        my_callbacks = [
+            EarlyStopping(patience=Main.early_stop_patience),
+            ModelCheckpoint(filepath='model.{epoch:02d}-{val_loss:.2f}.h5',
+                            monitor='val_loss',
+                            save_best_only=True,
+                            mode='max'),
+            TensorBoard(log_dir='./logs'),
+        ]
 
         # train
-
-        # convert string to numeric type
-        X_numeric = []
-        y_numeric = []
-        for X, y in zip(X_train_sentences, X_train_tags):
-            _X = []
-            _y = []
-            for word in X.split():
-                _X.append(int(Main.word2id[word]))
-            X_numeric.append(_X)
-
-            for tag in y.split():
-                _y.append(Main.tag2id[tag])
-            y_numeric.append(_y)
-
-        # padding
-        X_train_sentences = pad_sequences(X_numeric,
-                                          maxlen=Main.max_sentence_len,
-                                          dtype='int32',
-                                          padding='post',
-                                          value=0.0)
-
-        y_train_sentences = pad_sequences(y_numeric,
-                                          maxlen=Main.max_sentence_len,
-                                          dtype='int32',
-                                          padding='post',
-                                          value=0.0)
-
-        y_train_sentences = [to_categorical(i, num_classes=len(Main.tag2id)) for i in y_train_sentences] # BU SATIR OLMADAN ÇALIŞMIYOR !
-
-        history = model.fit(np.array(X_train_sentences),
-                            np.array(y_train_sentences),
+        history = model.fit(np.array(X_train),
+                            np.array(y_train),
                             batch_size=Main.batch_size,
                             epochs=Main.epoch,
                             validation_split=Main.validation_split_rate,
                             verbose=1,
-                            callbacks=callbacks_list)
+                            callbacks=my_callbacks)
+        # print(history.history) # get acc, loss info
+        # plot loss, accuracy
+        Main.plot_info(history.history, name="loss")
+        Main.plot_info(history.history, name="acc")
 
-        #model.save('model_weights.h5')
-        model.save(model_path)
-        #return history, model
+        # test
+        text = "what movies star bruce willis"
+        text_numeric = []
+        for word in text.split():
+            text_numeric.append(Main.word2id[word])
+        # padding
+        for i in range(len(text_numeric), Main.max_sentence_len):
+            text_numeric.append(0)
+        text_numeric = np.array(text_numeric).reshape((-1, 1)) # (max_sentence_len, ) formatında olmalı
+        #print(text_numeric)
+        print(text_numeric.shape)
+        exit()
 
+        result = model.predict(text_numeric)
+        print(result)
+
+        exit()
+
+
+        # history accuraccy hesapla grafik bastır
 
 
 
